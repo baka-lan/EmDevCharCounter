@@ -1,80 +1,119 @@
 package Main;
 
-import Dot.CharCountDot;
+import MyUtils.CCDot;
+import MyUtils.CharCounter;
+import MyUtils.FileHandler;
+import MyUtils.ThisSession;
 
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.PrintWriter;
+import javax.swing.filechooser.FileNameExtensionFilter;
+import java.io.*;
+import java.nio.file.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class Main {
-    public static void main(String[] args) {
-        //initialize scanner & get text
-        String inputName = "IN/input.txt";
-        Scanner scanner;
+    private static void processFile(File file) {
+        System.out.println("Start process file " + file);
+
+        FileHandler fileHandler = new FileHandler(file);
+        CharCounter charCounter;
+
         try {
-            scanner = new Scanner(new FileInputStream(inputName));
+            charCounter = fileHandler.run();
         } catch (FileNotFoundException e) {
             e.printStackTrace();
             return;
         }
 
-        //initialize Counters
-        Map<Character, Integer> map = new HashMap<>();
-        int wordsCounter = 0;
-
-        //process text
-        while (scanner.hasNext()){
-            //get String
-            String string = scanner.nextLine();
-
-            //split String to words
-            StringTokenizer st = new StringTokenizer(string, " ,.-?!;:");
-
-            //process words to character-count Map, count words
-            while (st.hasMoreTokens()) {
-                String currentString = st.nextToken().toLowerCase();
-
-                for (char c : currentString.toCharArray()) {
-                    map.put(c, (map.containsKey(c)) ? map.get(c) + 1 : 1);
-                }
-                wordsCounter++;
-            }
-        }
-
-        //unsorted Map to ArrayList & sort
-        ArrayList<CharCountDot> dots = new ArrayList<>();
+        Map<Character, Integer> map = charCounter.getMap();
+        ArrayList<CCDot> dots = new ArrayList<>();
 
         for (char c : map.keySet()) {
-            dots.add(new CharCountDot(c, map.get(c)));
+            dots.add(new CCDot(c, map.get(c)));
         }
 
-        dots.sort(Collections.reverseOrder(Comparator.comparingInt(CharCountDot::getCount)));
+        dots.sort(Collections.reverseOrder(Comparator.comparingInt(CCDot::getCount)));
 
-        //out
-        String outputName = "OUT/output.txt";
+        fileHandler.out(dots, charCounter.getWordsCount());
+        System.out.println("File " + file + " was processed.");
+    }
 
-        try (PrintWriter writer = new PrintWriter(outputName)) {
-            writer.println("Words count: " + wordsCounter);
-            StringBuilder sb = new StringBuilder();
-            for (CharCountDot dot : dots) {
-                sb.append(dot.getLetter());
-            }
-            writer.println("Unique characters: \"" + sb.toString() + "\"" + ", count: " + dots.size());
-            for (CharCountDot dot : dots) {
-                writer.println("'" + dot.getLetter() + "' " + dot.getCount());
-            }
-        } catch (FileNotFoundException e) {
+    public static void main(String[] args) {
+        System.out.println("Start program");
+        ThisSession session = ThisSession.getInstance(
+                "IN",
+                "OUT",
+                "txt",
+                "Windows-1251"
+        );
+
+        FileNameExtensionFilter fileNameExtensionFilter = new FileNameExtensionFilter(
+                "All files must have " + session.extension + " extension", session.extension);
+
+        List<File> fileList = new ArrayList<>();
+        try {
+            fileList = Files.list(session.inputFolder)
+                    .filter(Files::isRegularFile)
+                    .map(Path::toFile)
+                    .filter(fileNameExtensionFilter::accept)
+                    .collect(Collectors.toList());
+        } catch (IOException e) {
             e.printStackTrace();
+        }
 
-            System.out.println("Words count: " + wordsCounter);
-            StringBuilder sb = new StringBuilder();
-            for (CharCountDot dot : dots) {
-                sb.append(dot.getLetter());
+        if (fileList.size() == 0) {
+            System.out.println("There is no " + session.extension + " files.");
+        } else {
+            for (File file : fileList) {
+                processFile(file);
             }
-            System.out.println("Unique characters: \"" + sb.toString() + "\"" + ", count: " + dots.size());
-            for (CharCountDot dot : dots) {
-                System.out.println("'" + dot.getLetter() + "' " + dot.getCount());
+        }
+
+        WatchService watchService = null;
+        try {
+            watchService = session.inputFolder.getFileSystem().newWatchService();
+            session.inputFolder.register(watchService,
+                    StandardWatchEventKinds.ENTRY_CREATE,
+                    StandardWatchEventKinds.ENTRY_DELETE,
+                    StandardWatchEventKinds.ENTRY_MODIFY);
+        } catch (IOException e1) {
+            e1.printStackTrace();
+        }
+
+        System.out.println("All available " + session.extension + " files were processed. Waiting for changes...");
+        for (; ; ) {
+            WatchKey key = null;
+            try {
+                key = Objects.requireNonNull(watchService).take();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            for (WatchEvent event : Objects.requireNonNull(key).pollEvents()) {
+                File file = new File(session.inputFolder + "/" + event.context().toString());
+
+                if (!Files.isRegularFile(file.toPath()) || !fileNameExtensionFilter.accept(file)) {
+                    continue;
+                }
+
+                switch (event.kind().name()) {
+                    case "OVERFLOW":
+                        break;
+                    case "ENTRY_CREATE":
+                        System.out.println("File " + event.context() + " is created!");
+                        break;
+                    case "ENTRY_MODIFY":
+                        System.out.println("File " + event.context() + " is modified!");
+
+                        processFile(file);
+                        break;
+                    case "ENTRY_DELETE":
+                        System.out.println("File " + event.context() + " is deleted!");
+                        break;
+                }
+            }
+            boolean valid = key.reset();
+            if (!valid) {
+                break;
             }
         }
     }
